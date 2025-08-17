@@ -128,3 +128,130 @@ export class SafeSanitizer {
     return s.replace(/([%_\\])/g, "\\$1");
   }
 }
+
+
+import _ from "lodash";
+
+/**
+ * Compare two arrays of objects (snapshots) and return only meaningful differences:
+ *  - Added objects
+ *  - Removed objects
+ *  - Updated "proportion" or "isWinner" fields
+ *
+ * @param {Array<Object>} prevArray   The older snapshot (previous state).
+ * @param {Array<Object>} currArray   The newer snapshot (current state).
+ * @param {string} key                Unique identifier field for matching objects (default = "id").
+ * @param {string} path               Path prefix for event reporting (default = "").
+ * @returns {Array<Object>}           List of change events.
+ */
+function collectDiffEventsArray(prevArray, currArray, key = "id", path = "") {
+  const events = [];
+
+  // Index objects by "id" for easier lookup
+  const currByKey = _.keyBy(currArray, key);
+  const prevByKey = _.keyBy(prevArray, key);
+
+  // Collect all unique ids from both snapshots
+  const allKeys = _.union(_.keys(currByKey), _.keys(prevByKey));
+
+  for (const id of allKeys) {
+    const currItem = currByKey[id];
+    const prevItem = prevByKey[id];
+    const itemPath = `${path}[${id}]`;
+
+    // Case 1: Object was added (exists only in current snapshot)
+    if (!prevItem) {
+      events.push({ type: "added", path: itemPath, value: currItem });
+    }
+    // Case 2: Object was removed (exists only in previous snapshot)
+    else if (!currItem) {
+      events.push({ type: "removed", path: itemPath, value: prevItem });
+    }
+    // Case 3: Object exists in both → check for updates
+    else {
+      if (currItem.proportion !== prevItem.proportion) {
+        events.push({
+          type: "updated",
+          path: `${itemPath}.proportion`,
+          from: prevItem.proportion,
+          to: currItem.proportion,
+        });
+      }
+      if (currItem.isWinner !== prevItem.isWinner) {
+        events.push({
+          type: "updated",
+          path: `${itemPath}.isWinner`,
+          from: prevItem.isWinner,
+          to: currItem.isWinner,
+        });
+      }
+    }
+  }
+
+  return events;
+}
+
+/**
+ * Compare consecutive snapshots in a history array.
+ *
+ * NOTE: The history is assumed to be ordered DESC by createdAt
+ *       (newest snapshot first, oldest last).
+ *
+ * @param {Array<Array<Object>>} history  Full history of snapshots.
+ * @param {string} key                    Unique identifier field for objects (default = "id").
+ * @param {string} basePath               Path prefix (default = "variants").
+ * @returns {Array<{from:number,to:number,events:Array}>} List of diffs for each step.
+ */
+function collectConsecutiveDiffs(history, key = "id", basePath = "variants") {
+  const diffs = [];
+  // Go forward: compare newer vs older (DESC order!)
+  for (let i = 0; i < history.length - 1; i++) {
+    const newer = history[i]; // current snapshot
+    const older = history[i + 1]; // previous snapshot
+    const events = collectDiffEventsArray(older, newer, key, basePath);
+    diffs.push({ from: i + 1, to: i, events });
+  }
+  return diffs;
+}
+
+// ================== Example usage ==================
+
+// v0 = newest snapshot
+const v0 = [
+  {
+    id: 225,
+    proportion: 100,
+    isWinner: true,
+  },
+];
+
+// v1 = older snapshot
+const v1 = [
+  { id: 226, proportion: 75, isWinner: false },
+  { id: 225, proportion: 25, isWinner: false },
+];
+
+// v2 = even older snapshot
+const v2 = [
+  { id: 226, proportion: 60, isWinner: false },
+  { id: 225, proportion: 20, isWinner: false },
+  { id: 227, proportion: 20, isWinner: false },
+];
+
+// v3 = oldest snapshot
+const v3 = [
+  { id: 225, proportion: 50, isWinner: false },
+  { id: 227, proportion: 50, isWinner: true, test: "test" },
+];
+
+// History sorted DESC by time
+const history = [v0, v1, v2, v3];
+
+// Collect diffs between consecutive snapshots
+const allDiffs = collectConsecutiveDiffs(history, "id", "");
+
+// Print results in console table
+allDiffs.forEach((diff) => {
+  console.table(diff.events);
+});
+
